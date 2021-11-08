@@ -74,10 +74,11 @@ impl<'s, T: Ord + Clone> Ecdf<'s, T> {
     ///
     /// Returns None if the percentile was less greater than 100.
     ///
-    /// # Panics
+    /// # Invariants
     ///
     /// The percentile requested must be between 1 and 100 inclusive. In
-    /// particular, there is no 0-percentile.
+    /// particular, there is no 0-percentile. Returns None if percentile
+    /// invariant not met.
     ///
     /// # Examples
     ///
@@ -223,12 +224,14 @@ pub fn ecdf<T: Ord>(samples: &[T], t: T) -> Option<f64> {
 /// sample. Otherwise, Ecdf::new should be used to create a structure that
 /// takes the upfront O(n log n) sort cost but calculates percentiles in O(1).
 ///
-/// # Panics
+/// # Invariants
 ///
 /// The sample set must be non-empty.
 ///
 /// The percentile requested must be between 1 and 100 inclusive. In particular,
 /// there is no 0-percentile.
+///
+/// Returns None if the invariants are not met.
 ///
 /// # Examples
 ///
@@ -263,12 +266,12 @@ pub fn percentile<T: Ord + Clone>(samples: &[T], p: u8) -> Option<T> {
 /// sample. Otherwise, Ecdf::new should be used to create a structure that
 /// takes the upfront O(n log n) sort cost but calculates permilles in O(1).
 ///
-/// # Panics
-///
 /// The sample set must be non-empty.
 ///
 /// The permille requested must be between 1 and 1000 inclusive. In particular,
 /// there is no 0-permille.
+///
+/// Returns None if the invariants are not met.
 ///
 /// # Examples
 ///

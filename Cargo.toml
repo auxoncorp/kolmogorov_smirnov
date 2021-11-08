@@ -22,16 +22,11 @@ exclude = [
 name = "critical_values"
 
 [[bin]]
-name = "normal"
-
-[[bin]]
 name = "ks_f64"
 
 [[bin]]
 name = "ks_i64"
 
-[dependencies]
-rand = "0.3.12"
-
 [dev-dependencies]
 quickcheck = "0.2"
+rand = "0.3.12"

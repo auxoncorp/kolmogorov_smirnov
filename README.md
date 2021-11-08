@@ -7,7 +7,7 @@ in Rust.
 # Fork Changes
 ----------------
 ### Added 
-* Non-allocating variations on certain functions are provided (TODO - list these)
+* Non-allocating variation of the primary function, `test_nonallocating`
  
 ### Changed
 * The primary `test` function returns a `Result<_, _>` rather than panicking
@@ -18,7 +18,6 @@ in Rust.
 ### Removed
 * The detailed explanation and examples in the original crate's extended documentation [here](http://daithiocrualaoich.github.io/kolmogorov_smirnov).
 * Docker support
-* Several small command line utilities for KS-related functions
 * Sample data and charts
 * The `test_f64` function. Users may instead wrap their
 floats using the [ordered-float](https://crates.io/crates/ordered-float) crate.

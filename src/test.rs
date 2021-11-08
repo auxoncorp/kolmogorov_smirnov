@@ -236,7 +236,11 @@ fn calculate_statistic_inner_presorted<T: std::cmp::PartialEq + Ord>(xs: &[T], y
 /// Calculate the probability that the null hypothesis is false for a two sample
 /// Kolmogorov-Smirnov test. Can only reject the null hypothesis if this
 /// evidence exceeds the confidence level required.
-fn calculate_reject_probability(statistic: f64, n1: usize, n2: usize) -> Result<f64, TestError> {
+pub fn calculate_reject_probability(
+    statistic: f64,
+    n1: usize,
+    n2: usize,
+) -> Result<f64, TestError> {
     // Only supports samples of size > 7.
     if n1 < 8 || n2 < 8 {
         return Err(TestError::SequenceHasFewerThanEightElements);
