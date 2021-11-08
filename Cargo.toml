@@ -7,6 +7,7 @@ repository = "https://github.com/daithiocrualaoich/kolmogorov_smirnov"
 authors = ["Daithi O Crualaoich <daithi.ocrualaoich@gmail.com>"]
 license = "Apache-2.0"
 keywords = ["statistics"]
+edition = "2018"
 exclude = [
   ".dockerignore",
   ".gitignore",

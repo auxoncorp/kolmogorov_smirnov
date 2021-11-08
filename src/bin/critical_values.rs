@@ -21,7 +21,9 @@ use std::env;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let confidence: f64 = args[1].parse().expect("<confidence> must be a floating point number.");
+    let confidence: f64 = args[1]
+        .parse()
+        .expect("<confidence> must be a floating point number.");
     let n1: usize = args[2].parse().expect("<num_samples> must be an integer.");
     let limit: usize = args[3].parse().expect("<limit> must be an integer.");
 
@@ -30,10 +32,13 @@ fn main() {
 
     println!("n1\tn2\tconfidence\tcritical_value");
     for n2 in 16..(limit + 1) {
-        println!("{}\t{}\t{}\t{}",
-                 n1,
-                 n2,
-                 confidence,
-                 calculate_critical_value(n1, n2, confidence));
+        println!(
+            "{}\t{}\t{}\t{}",
+            n1,
+            n2,
+            confidence,
+            calculate_critical_value(n1, n2, confidence)
+                .expect("Could not compute critical value.")
+        );
     }
 }

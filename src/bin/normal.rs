@@ -1,7 +1,7 @@
 extern crate rand;
 
+use rand::distributions::{IndependentSample, Normal};
 use std::env;
-use rand::distributions::{Normal, IndependentSample};
 
 /// Prints a sequence of Normal deviates.
 ///
@@ -20,8 +20,12 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let n: u32 = args[1].parse().expect("<num_deviates> must be an integer.");
-    let mean: f64 = args[2].parse().expect("<mean> must be a floating point number.");
-    let variance: f64 = args[3].parse().expect("<variance> must be a floating point number.");
+    let mean: f64 = args[2]
+        .parse()
+        .expect("<mean> must be a floating point number.");
+    let variance: f64 = args[3]
+        .parse()
+        .expect("<variance> must be a floating point number.");
 
     assert!(n > 0 && variance.is_sign_positive());
 

@@ -1,9 +1,10 @@
 //! Two Sample Kolmogorov-Smirnov Test
 
-use std::cmp::{min, Ord, Ordering};
+use std::cmp::{min, Ord};
 
 /// Two sample test result.
-pub struct TestResult {
+#[derive(Debug)]
+pub struct TestOutcome {
     pub is_rejected: bool,
     pub statistic: f64,
     pub reject_probability: f64,
@@ -11,13 +12,32 @@ pub struct TestResult {
     pub confidence: f64,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum TestError {
+    /// The algorithm only supports comparing samples of size > 7
+    SequenceHasFewerThanEightElements,
+    /// The confidence value must be expressed as between 0.0 and 1.0
+    /// E.G. 0.95
+    ConfidenceMustBeBetweenZeroAndOneExclusive,
+    /// The algorithm for estimating the critical value could not converge
+    /// for the specified combination of sample sizes and confidence level.
+    CouldNotConvergeOnCriticalValue {
+        sample_size_1: usize,
+        sample_size_2: usize,
+        confidence: f64,
+    },
+    /// Could not converge on Kolmogorov-Smirnov probability function
+    CouldNotConvergeOnKolmogorovSmirnovProbabilityFunction { lambda: f64 },
+    /// Our algorithm for determining a reject probability produced an out-of-bounds value.
+    InvalidEstimatedKolmogorovSmirnovProbabilityFunctionValue { lambda: f64, value: f64 },
+}
+
 /// Perform a two sample Kolmogorov-Smirnov test on given samples.
 ///
 /// The samples must have length > 7 elements for the test to be valid.
+/// The confidence must be greater than 0.0 and less than 1.0
 ///
-/// # Panics
-///
-/// There are assertion panics if either sequence has <= 7 elements.
+/// Mutates the order of the input samples, but does not allocate.
 ///
 /// # Examples
 ///
@@ -28,115 +48,133 @@ pub struct TestResult {
 /// let ys = vec!(12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
 /// let confidence = 0.95;
 ///
-/// let result = ks::test(&xs, &ys, confidence);
+/// let result = ks::test(&xs, &ys, confidence).unwrap();
 ///
 /// if result.is_rejected {
 ///     println!("{:?} and {:?} are not from the same distribution with probability {}.",
 ///       xs, ys, result.reject_probability);
 /// }
 /// ```
-pub fn test<T: Ord + Clone>(xs: &[T], ys: &[T], confidence: f64) -> TestResult {
-    assert!(xs.len() > 0 && ys.len() > 0);
-    assert!(0.0 < confidence && confidence < 1.0);
+pub fn test_nonallocating<T: Ord + Clone>(
+    xs: &mut [T],
+    ys: &mut [T],
+    confidence: f64,
+) -> Result<TestOutcome, TestError> {
+    if xs.len() < 8 || ys.len() < 8 {
+        return Err(TestError::SequenceHasFewerThanEightElements);
+    }
+    if confidence.is_nan() || !(0.0 < confidence && confidence < 1.0) {
+        return Err(TestError::ConfidenceMustBeBetweenZeroAndOneExclusive);
+    }
 
-    // Only supports samples of size > 7.
-    assert!(xs.len() > 7 && ys.len() > 7);
+    let statistic = calculate_statistic_nonallocating(xs, ys)?;
+    let critical_value = calculate_critical_value(xs.len(), ys.len(), confidence)?;
 
-    let statistic = calculate_statistic(xs, ys);
-    let critical_value = calculate_critical_value(xs.len(), ys.len(), confidence);
-
-    let reject_probability = calculate_reject_probability(statistic, xs.len(), ys.len());
+    let reject_probability = calculate_reject_probability(statistic, xs.len(), ys.len())?;
     let is_rejected = reject_probability > confidence;
 
-    TestResult {
-        is_rejected: is_rejected,
-        statistic: statistic,
-        reject_probability: reject_probability,
-        critical_value: critical_value,
-        confidence: confidence,
-    }
+    Ok(TestOutcome {
+        is_rejected,
+        statistic,
+        reject_probability,
+        critical_value,
+        confidence,
+    })
 }
 
-/// Wrapper type for f64 to implement Ord and make usable with test.
-#[derive(PartialEq, Clone)]
-struct OrderableF64 {
-    val: f64,
-}
-
-impl OrderableF64 {
-    fn new(val: f64) -> OrderableF64 {
-        OrderableF64 { val: val }
-    }
-}
-
-impl Eq for OrderableF64 {}
-
-impl PartialOrd for OrderableF64 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.val.partial_cmp(&other.val)
-    }
-}
-
-impl Ord for OrderableF64 {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.val.partial_cmp(&other.val).unwrap()
-    }
-}
-
-/// Perform a two sample Kolmogorov-Smirnov test on given f64 samples.
-///
-/// This is necessary because f64 does not implement Ord in Rust as some
-/// elements are incomparable, e.g. NaN. This function wraps the f64s in
-/// implementation of Ord which panics on incomparable elements.
+/// Perform a two sample Kolmogorov-Smirnov test on given samples.
 ///
 /// The samples must have length > 7 elements for the test to be valid.
-///
-/// # Panics
-///
-/// There are assertion panics if either sequence has <= 7 elements.
-///
-/// If any of the f64 elements in the input samples are unorderable, e.g. NaN.
+/// The confidence must be greater than 0.0 and less than 1.0
 ///
 /// # Examples
 ///
 /// ```
 /// extern crate kolmogorov_smirnov as ks;
 ///
-/// let xs = vec!(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0);
-/// let ys = vec!(12.0, 11.0, 10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0);
+/// let xs = vec!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+/// let ys = vec!(12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
 /// let confidence = 0.95;
 ///
-/// let result = ks::test_f64(&xs, &ys, confidence);
+/// let result = ks::test(&xs, &ys, confidence).unwrap();
 ///
 /// if result.is_rejected {
 ///     println!("{:?} and {:?} are not from the same distribution with probability {}.",
 ///       xs, ys, result.reject_probability);
 /// }
 /// ```
-pub fn test_f64(xs: &[f64], ys: &[f64], confidence: f64) -> TestResult {
-    let xs: Vec<OrderableF64> = xs.iter().map(|&f| OrderableF64::new(f)).collect();
-    let ys: Vec<OrderableF64> = ys.iter().map(|&f| OrderableF64::new(f)).collect();
+pub fn test<T: Ord + Clone>(xs: &[T], ys: &[T], confidence: f64) -> Result<TestOutcome, TestError> {
+    if xs.len() < 8 || ys.len() < 8 {
+        return Err(TestError::SequenceHasFewerThanEightElements);
+    }
+    if confidence.is_nan() || !(0.0 < confidence && confidence < 1.0) {
+        return Err(TestError::ConfidenceMustBeBetweenZeroAndOneExclusive);
+    }
 
-    test(&xs, &ys, confidence)
+    let statistic = calculate_statistic_allocating(xs, ys)?;
+    let critical_value = calculate_critical_value(xs.len(), ys.len(), confidence)?;
+
+    let reject_probability = calculate_reject_probability(statistic, xs.len(), ys.len())?;
+    let is_rejected = reject_probability > confidence;
+
+    Ok(TestOutcome {
+        is_rejected,
+        statistic,
+        reject_probability,
+        critical_value,
+        confidence,
+    })
 }
 
 /// Calculate the test statistic for the two sample Kolmogorov-Smirnov test.
 ///
 /// The test statistic is the maximum vertical distance between the ECDFs of
 /// the two samples.
-fn calculate_statistic<T: Ord + Clone>(xs: &[T], ys: &[T]) -> f64 {
-    let n = xs.len();
-    let m = ys.len();
+///
+/// This function sorts the input samples.
+fn calculate_statistic_nonallocating<T: Ord + Clone>(
+    xs: &mut [T],
+    ys: &mut [T],
+) -> Result<f64, TestError> {
+    if xs.is_empty() || ys.is_empty() {
+        return Err(TestError::SequenceHasFewerThanEightElements);
+    }
 
-    assert!(n > 0 && m > 0);
-
-    let mut xs = xs.to_vec();
-    let mut ys = ys.to_vec();
-
-    // xs and ys must be sorted for the stepwise ECDF calculations to work.
     xs.sort();
     ys.sort();
 
+    Ok(calculate_statistic_inner_presorted(xs, ys))
+}
+/// Calculate the test statistic for the two sample Kolmogorov-Smirnov test.
+///
+/// The test statistic is the maximum vertical distance between the ECDFs of
+/// the two samples.
+///
+/// This function copies each input into a new Vec in order to do sorting.
+fn calculate_statistic_allocating<T: Ord + Clone>(xs: &[T], ys: &[T]) -> Result<f64, TestError> {
+    if xs.is_empty() || ys.is_empty() {
+        return Err(TestError::SequenceHasFewerThanEightElements);
+    }
+
+    let (xs, ys) = {
+        let mut xs = xs.to_vec();
+        let mut ys = ys.to_vec();
+
+        // xs and ys must be sorted for the stepwise ECDF calculations to work.
+        xs.sort();
+        ys.sort();
+        (xs, ys)
+    };
+    Ok(calculate_statistic_inner_presorted(&xs, &ys))
+}
+/// Internal use only, because it strongly assumes that the input samples
+/// are pre-sorted and of an acceptable length (e.g. > 7)
+///
+/// Calculate the test statistic for the two sample Kolmogorov-Smirnov test.
+///
+/// The test statistic is the maximum vertical distance between the ECDFs of
+/// the two samples.
+fn calculate_statistic_inner_presorted<T: std::cmp::PartialEq + Ord>(xs: &[T], ys: &[T]) -> f64 {
     // The current value testing for ECDF difference. Sweeps up through elements
     // present in xs and ys.
     let mut current: &T;
@@ -152,6 +190,8 @@ fn calculate_statistic<T: Ord + Clone>(xs: &[T], ys: &[T]) -> f64 {
     // The test statistic value computed over values <= current.
     let mut statistic = 0.0;
 
+    let n = xs.len();
+    let m = ys.len();
     while i < n && j < m {
         // Advance i through duplicate samples in xs.
         let x_i = &xs[i];
@@ -196,9 +236,11 @@ fn calculate_statistic<T: Ord + Clone>(xs: &[T], ys: &[T]) -> f64 {
 /// Calculate the probability that the null hypothesis is false for a two sample
 /// Kolmogorov-Smirnov test. Can only reject the null hypothesis if this
 /// evidence exceeds the confidence level required.
-fn calculate_reject_probability(statistic: f64, n1: usize, n2: usize) -> f64 {
+fn calculate_reject_probability(statistic: f64, n1: usize, n2: usize) -> Result<f64, TestError> {
     // Only supports samples of size > 7.
-    assert!(n1 > 7 && n2 > 7);
+    if n1 < 8 || n2 < 8 {
+        return Err(TestError::SequenceHasFewerThanEightElements);
+    }
 
     let n1 = n1 as f64;
     let n2 = n2 as f64;
@@ -206,17 +248,22 @@ fn calculate_reject_probability(statistic: f64, n1: usize, n2: usize) -> f64 {
     let factor = ((n1 * n2) / (n1 + n2)).sqrt();
     let term = (factor + 0.12 + 0.11 / factor) * statistic;
 
-    let reject_probability = 1.0 - probability_kolmogorov_smirnov(term);
-
-    assert!(0.0 <= reject_probability && reject_probability <= 1.0);
-    reject_probability
+    let reject_probability = 1.0 - probability_kolmogorov_smirnov(term)?;
+    if !(0.0..=1.0).contains(&reject_probability) {
+        return Err(
+            TestError::InvalidEstimatedKolmogorovSmirnovProbabilityFunctionValue {
+                lambda: term,
+                value: reject_probability,
+            },
+        );
+    }
+    Ok(reject_probability)
 }
 
 /// Calculate the critical value for the two sample Kolmogorov-Smirnov test.
 ///
-/// # Panics
 ///
-/// No convergence panic if the binary search does not locate the critical
+/// No convergence error returned if the binary search does not locate the critical
 /// value in less than 200 iterations.
 ///
 /// # Examples
@@ -224,15 +271,19 @@ fn calculate_reject_probability(statistic: f64, n1: usize, n2: usize) -> f64 {
 /// ```
 /// extern crate kolmogorov_smirnov as ks;
 ///
-/// let critical_value = ks::calculate_critical_value(256, 256, 0.95);
+/// let critical_value = ks::calculate_critical_value(256, 256, 0.95).unwrap();
 /// println!("Critical value at 95% confidence for samples of size 256 is {}",
 ///       critical_value);
 /// ```
-pub fn calculate_critical_value(n1: usize, n2: usize, confidence: f64) -> f64 {
-    assert!(0.0 < confidence && confidence < 1.0);
+pub fn calculate_critical_value(n1: usize, n2: usize, confidence: f64) -> Result<f64, TestError> {
+    if confidence.is_nan() || !(0.0 < confidence && confidence < 1.0) {
+        return Err(TestError::ConfidenceMustBeBetweenZeroAndOneExclusive);
+    }
 
     // Only supports samples of size > 7.
-    assert!(n1 > 7 && n2 > 7);
+    if n1 < 8 || n2 < 8 {
+        return Err(TestError::SequenceHasFewerThanEightElements);
+    }
 
     // The test statistic is between zero and one so can binary search quickly
     // for the critical value.
@@ -241,11 +292,11 @@ pub fn calculate_critical_value(n1: usize, n2: usize, confidence: f64) -> f64 {
 
     for _ in 1..200 {
         if low + 1e-8 >= high {
-            return high;
+            return Ok(high);
         }
 
         let mid = low + (high - low) / 2.0;
-        let reject_probability = calculate_reject_probability(mid, n1, n2);
+        let reject_probability = calculate_reject_probability(mid, n1, n2)?;
 
         if reject_probability > confidence {
             // Maintain invariant that reject_probability(high) > confidence.
@@ -255,28 +306,24 @@ pub fn calculate_critical_value(n1: usize, n2: usize, confidence: f64) -> f64 {
             low = mid;
         }
     }
-
-    panic!("No convergence in calculate_critical_value({}, {}, {}).",
-           n1,
-           n2,
-           confidence);
+    Err(TestError::CouldNotConvergeOnCriticalValue {
+        sample_size_1: n1,
+        sample_size_2: n2,
+        confidence,
+    })
 }
 
 /// Calculate the Kolmogorov-Smirnov probability function.
-fn probability_kolmogorov_smirnov(lambda: f64) -> f64 {
+fn probability_kolmogorov_smirnov(lambda: f64) -> Result<f64, TestError> {
     if lambda == 0.0 {
-        return 1.0;
+        return Ok(1.0);
     }
 
     let minus_two_lambda_squared = -2.0 * lambda * lambda;
     let mut q_ks = 0.0;
 
     for j in 1..200 {
-        let sign = if j % 2 == 1 {
-            1.0
-        } else {
-            -1.0
-        };
+        let sign = if j % 2 == 1 { 1.0 } else { -1.0 };
 
         let j = j as f64;
         let term = sign * 2.0 * (minus_two_lambda_squared * j * j).exp();
@@ -285,12 +332,10 @@ fn probability_kolmogorov_smirnov(lambda: f64) -> f64 {
 
         if term.abs() < 1e-8 {
             // Trim results that exceed 1.
-            return q_ks.min(1.0);
+            return Ok(q_ks.min(1.0));
         }
     }
-
-    panic!("No convergence in probability_kolmogorov_smirnov({}).",
-           lambda);
+    Err(TestError::CouldNotConvergeOnKolmogorovSmirnovProbabilityFunction { lambda })
 }
 
 #[cfg(test)]
@@ -298,13 +343,13 @@ mod tests {
     extern crate quickcheck;
     extern crate rand;
 
-    use self::quickcheck::{Arbitrary, Gen, QuickCheck, Testable, StdGen};
+    use self::quickcheck::{Arbitrary, Gen, QuickCheck, StdGen, Testable};
     use self::rand::Rng;
     use std::cmp;
     use std::usize;
 
-    use super::test;
-    use ecdf::Ecdf;
+    use super::{test, TestError};
+    use crate::ecdf::Ecdf;
 
     const EPSILON: f64 = 1e-10;
 
@@ -350,44 +395,52 @@ mod tests {
             Samples { vec: vec }
         }
 
-        fn shrink(&self) -> Box<Iterator<Item = Samples>> {
+        fn shrink(&self) -> Box<dyn Iterator<Item = Samples>> {
             let vec: Vec<u64> = self.vec.clone();
-            let shrunk: Box<Iterator<Item = Vec<u64>>> = vec.shrink();
+            let shrunk: Box<dyn Iterator<Item = Vec<u64>>> = vec.shrink();
 
             Box::new(shrunk.filter(|v| v.len() > 7).map(|v| Samples { vec: v }))
         }
     }
 
     #[test]
-    #[should_panic(expected="assertion failed: xs.len() > 0 && ys.len() > 0")]
-    fn test_panics_on_empty_samples_set() {
+    fn test_error_on_empty_samples_set() {
         let xs: Vec<u64> = vec![];
         let ys: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-        test(&xs, &ys, 0.95);
+        assert_eq!(
+            TestError::SequenceHasFewerThanEightElements,
+            test(&xs, &ys, 0.95).unwrap_err()
+        );
     }
 
     #[test]
-    #[should_panic(expected="assertion failed: xs.len() > 0 && ys.len() > 0")]
-    fn test_panics_on_empty_other_samples_set() {
+    fn test_error_on_empty_other_samples_set() {
         let xs: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let ys: Vec<u64> = vec![];
-        test(&xs, &ys, 0.95);
+        assert_eq!(
+            TestError::SequenceHasFewerThanEightElements,
+            test(&xs, &ys, 0.95).unwrap_err()
+        );
     }
 
     #[test]
-    #[should_panic(expected="assertion failed: 0.0 < confidence && confidence < 1.0")]
-    fn test_panics_on_confidence_leq_zero() {
+    fn test_error_on_confidence_leq_zero() {
         let xs: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let ys: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-        test(&xs, &ys, 0.0);
+        assert_eq!(
+            TestError::ConfidenceMustBeBetweenZeroAndOneExclusive,
+            test(&xs, &ys, 0.0).unwrap_err()
+        );
     }
 
     #[test]
-    #[should_panic(expected="assertion failed: 0.0 < confidence && confidence < 1.0")]
-    fn test_panics_on_confidence_geq_one() {
+    fn test_error_on_confidence_geq_one() {
         let xs: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let ys: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-        test(&xs, &ys, 1.0);
+        assert_eq!(
+            TestError::ConfidenceMustBeBetweenZeroAndOneExclusive,
+            test(&xs, &ys, 1.0).unwrap_err()
+        );
     }
 
     /// Alternative calculation for the test statistic for the two sample
@@ -395,9 +448,11 @@ mod tests {
     /// verification check against actual calculation used.
     fn calculate_statistic_alt<T: Ord + Clone>(xs: &[T], ys: &[T]) -> f64 {
         assert!(xs.len() > 0 && ys.len() > 0);
+        let mut xs_alt = xs.to_vec();
+        let mut ys_alt = ys.to_vec();
 
-        let ecdf_xs = Ecdf::new(xs);
-        let ecdf_ys = Ecdf::new(ys);
+        let ecdf_xs = Ecdf::new(&mut xs_alt).unwrap();
+        let ecdf_ys = Ecdf::new(&mut ys_alt).unwrap();
 
         let mut statistic = 0.0;
 
@@ -421,7 +476,7 @@ mod tests {
     #[test]
     fn test_calculate_statistic() {
         fn prop(xs: Samples, ys: Samples) -> bool {
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let actual = result.statistic;
             let expected = calculate_statistic_alt(&xs.vec, &ys.vec);
 
@@ -434,7 +489,7 @@ mod tests {
     #[test]
     fn test_statistic_is_between_zero_and_one() {
         fn prop(xs: Samples, ys: Samples) -> bool {
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let actual = result.statistic;
 
             0.0 <= actual && actual <= 1.0
@@ -448,7 +503,7 @@ mod tests {
         fn prop(xs: Samples) -> bool {
             let ys = xs.clone();
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
 
             result.statistic == 0.0
         }
@@ -462,7 +517,7 @@ mod tests {
             let mut ys = xs.clone();
             ys.shuffle();
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
 
             result.statistic == 0.0
         }
@@ -479,7 +534,7 @@ mod tests {
             let ys_min = xs.max() + 1;
             ys.vec = ys.vec.iter().map(|&y| cmp::max(y, ys_min)).collect();
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
 
             result.statistic == 1.0
         }
@@ -501,7 +556,7 @@ mod tests {
                 ys.vec.push(x);
             }
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
 
             result.statistic == 0.5
         }
@@ -517,7 +572,7 @@ mod tests {
             let mut ys = xs.clone();
             ys.vec.push(min - 1);
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let expected = 1.0 / ys.vec.len() as f64;
 
             result.statistic == expected
@@ -534,7 +589,7 @@ mod tests {
             let mut ys = xs.clone();
             ys.vec.push(max + 1);
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let expected = 1.0 / ys.vec.len() as f64;
 
             (result.statistic - expected).abs() < EPSILON
@@ -555,7 +610,7 @@ mod tests {
             ys.vec.push(min - 1);
             ys.vec.push(max + 1);
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let expected = 1.0 / ys.vec.len() as f64;
 
             (result.statistic - expected).abs() < EPSILON
@@ -574,7 +629,7 @@ mod tests {
                 ys.vec.push(min - (j as u64) - 1);
             }
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let expected = n as f64 / ys.vec.len() as f64;
 
             result.statistic == expected
@@ -593,7 +648,7 @@ mod tests {
                 ys.vec.push(max + (j as u64) + 1);
             }
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let expected = n as f64 / ys.vec.len() as f64;
 
             (result.statistic - expected).abs() < EPSILON
@@ -614,7 +669,7 @@ mod tests {
                 ys.vec.push(max + (j as u64) + 1);
             }
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let expected = n as f64 / ys.vec.len() as f64;
 
             (result.statistic - expected).abs() < EPSILON
@@ -638,7 +693,7 @@ mod tests {
                 ys.vec.push(max + (j as u64) + 1);
             }
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
             let expected = cmp::max(n, m) as f64 / ys.vec.len() as f64;
 
             (result.statistic - expected).abs() < EPSILON
@@ -650,7 +705,7 @@ mod tests {
     #[test]
     fn test_is_rejected_if_reject_probability_greater_than_confidence() {
         fn prop(xs: Samples, ys: Samples) -> bool {
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
 
             if result.is_rejected {
                 result.reject_probability > 0.95
@@ -667,7 +722,7 @@ mod tests {
         fn prop(xs: Samples) -> bool {
             let ys = xs.clone();
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
 
             result.reject_probability == 0.0
         }
@@ -681,7 +736,7 @@ mod tests {
             let mut ys = xs.clone();
             ys.shuffle();
 
-            let result = test(&xs.vec, &ys.vec, 0.95);
+            let result = test(&xs.vec, &ys.vec, 0.95).unwrap();
 
             result.reject_probability == 0.0
         }
