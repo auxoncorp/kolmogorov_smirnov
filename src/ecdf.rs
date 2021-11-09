@@ -72,7 +72,7 @@ impl<'s, T: Ord + Clone> Ecdf<'s, T> {
 
     /// Calculate a percentile for the sample using the Nearest Rank method.
     ///
-    /// Returns None if the percentile was less greater than 100.
+    /// Returns None if the percentile was zero or greater than 100.
     ///
     /// # Invariants
     ///
