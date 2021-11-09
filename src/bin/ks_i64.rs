@@ -1,10 +1,8 @@
 extern crate kolmogorov_smirnov as ks;
 
-use ks::test;
-
 use std::env;
-use std::io::{BufReader, BufRead};
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 fn parse_int(s: String) -> i64 {
@@ -38,7 +36,7 @@ fn main() {
     let xs: Vec<i64> = lines1.map(parse_int).collect();
     let ys: Vec<i64> = lines2.map(parse_int).collect();
 
-    let result = ks::test(&xs, &ys, 0.95);
+    let result = ks::test(&xs, &ys, 0.95).expect("Could not compute test value.");
 
     if result.is_rejected {
         println!("Samples are from different distributions.");

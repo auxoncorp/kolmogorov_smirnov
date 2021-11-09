@@ -7,6 +7,7 @@ repository = "https://github.com/daithiocrualaoich/kolmogorov_smirnov"
 authors = ["Daithi O Crualaoich <daithi.ocrualaoich@gmail.com>"]
 license = "Apache-2.0"
 keywords = ["statistics"]
+edition = "2018"
 exclude = [
   ".dockerignore",
   ".gitignore",
@@ -21,16 +22,11 @@ exclude = [
 name = "critical_values"
 
 [[bin]]
-name = "normal"
-
-[[bin]]
 name = "ks_f64"
 
 [[bin]]
 name = "ks_i64"
 
-[dependencies]
-rand = "0.3.12"
-
 [dev-dependencies]
 quickcheck = "0.2"
+rand = "0.3.12"
